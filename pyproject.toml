@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "finagent"
+version = "0.1.0"
+description = "FinAgent: an autonomous multimodal financial data analyst"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "google-genai>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+]
+
+[project.scripts]
+finagent = "finagent.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/finagent"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "C4", "RUF", "N", "PT"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["google.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = ["live: tests that call the real Gemini API (deselected by default)"]
