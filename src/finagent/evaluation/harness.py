@@ -6,10 +6,11 @@ import json
 import logging
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
+from finagent.llm.base import QuotaExhaustedError
 from finagent.schemas import Answer
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class EvalSummary:
     n_correct: int
     n_errors: int
     mean_latency_s: float
+    mean_metrics: dict[str, float] = field(default_factory=dict)
 
     @property
     def accuracy(self) -> float:
@@ -46,11 +48,16 @@ def _read_records(path: Path) -> dict[str, dict[str, Any]]:
 def summarize(path: Path) -> EvalSummary:
     records = list(_read_records(path).values())
     n = len(records)
+    totals: dict[str, list[float]] = {}
+    for r in records:
+        for name, value in (r.get("metrics") or {}).items():
+            totals.setdefault(name, []).append(value)
     return EvalSummary(
         n=n,
         n_correct=sum(1 for r in records if r["correct"]),
         n_errors=sum(1 for r in records if r["error"] is not None),
         mean_latency_s=(sum(r["latency_s"] for r in records) / n) if n else 0.0,
+        mean_metrics={k: sum(v) / len(v) for k, v in totals.items()},
     )
 
 
@@ -62,12 +69,15 @@ def run_evaluation(
     id_fn: Callable[[E], str],
     out_path: Path,
     limit: int | None = None,
+    metrics_fn: Callable[[E, Answer], dict[str, float]] | None = None,
 ) -> EvalSummary:
     """Run ``answer_fn`` over ``examples`` and append results to ``out_path`` (JSONL).
 
     Already-completed examples are skipped, so an interrupted run (or a Colab session reset)
-    resumes where it stopped and never re-spends API budget. Examples that previously
-    errored are retried. One failing example never aborts the run.
+    resumes where it stopped and never re-spends API budget.
+    ``metrics_fn`` adds per-example numeric metrics (e.g. retrieval recall) that are averaged
+    in the summary. Examples that previously errored are retried. One failing example never
+    aborts the run, but an exhausted API quota does (it is re-raised; progress is saved).
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     done = {i for i, r in _read_records(out_path).items() if r["error"] is None}
@@ -82,7 +92,14 @@ def run_evaluation(
                 answer = answer_fn(ex)
                 record["answer"] = answer.model_dump()
                 record["correct"] = bool(score_fn(ex, answer))
+                if metrics_fn is not None:
+                    record["metrics"] = metrics_fn(ex, answer)
                 record["error"] = None
+            except QuotaExhaustedError:
+                # Not this example's fault and every remaining one would fail too: stop now.
+                # Nothing is recorded for it, so a later resume retries it (calls are cached).
+                logger.error("Quota exhausted after %d/%d examples; stopping.", idx - 1, len(todo))
+                raise
             except Exception as exc:  # one bad example must not kill the whole run
                 logger.exception("Example %s failed", record["id"])
                 record["error"] = f"{type(exc).__name__}: {exc}"

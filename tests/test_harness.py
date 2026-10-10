@@ -70,3 +70,30 @@ def test_limit(tmp_path: Path) -> None:
         limit=3,
     )
     assert summary.n == 3
+
+
+def test_quota_exhaustion_aborts_run_and_keeps_progress(tmp_path: Path) -> None:
+    import pytest
+
+    from finagent.llm.base import QuotaExhaustedError
+
+    out = tmp_path / "r.jsonl"
+
+    def answer_fn(x: int) -> Answer:
+        if x == 3:
+            raise QuotaExhaustedError("daily limit")
+        return Answer(answer="ok")
+
+    kwargs = {"score_fn": lambda _x, _a: True, "id_fn": str, "out_path": out}
+    with pytest.raises(QuotaExhaustedError):
+        run_evaluation([1, 2, 3, 4, 5], answer_fn=answer_fn, **kwargs)  # type: ignore[arg-type]
+    assert summarize(out).n == 2  # examples 1 and 2 saved; 3 not recorded; 4, 5 never started
+
+    calls: list[int] = []
+
+    def recovered(x: int) -> Answer:
+        calls.append(x)
+        return Answer(answer="ok")
+
+    run_evaluation([1, 2, 3, 4, 5], answer_fn=recovered, **kwargs)  # type: ignore[arg-type]
+    assert calls == [3, 4, 5]  # resume picks up exactly where it stopped

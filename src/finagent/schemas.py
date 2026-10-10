@@ -42,6 +42,30 @@ class Answer(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+class Page(BaseModel):
+    """One page of a source document. ``page`` is 0-based, matching FinanceBench's gold pages."""
+
+    doc_id: str
+    page: int
+    text: str
+
+
+class Chunk(BaseModel):
+    """A retrievable passage that never crosses a page boundary (keeps citations exact)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    chunk_id: str
+    doc_id: str
+    page: int
+    text: str
+
+
+class ScoredChunk(BaseModel):
+    chunk: Chunk
+    score: float
+
+
 # --------------------------------------------------------------------------------------
 # Benchmark example schemas
 # --------------------------------------------------------------------------------------

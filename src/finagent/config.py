@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     google_api_key: SecretStr | None = None
 
     # Model names change often; keep them in config, never hard-code them in logic.
-    llm_model: str = "gemini-3.8-flash"
+    llm_model: str = "gemini-2.5-flash"
     embed_model: str = "gemini-embedding-001"
 
     # Cost and rate control (free-tier limits are low; tune to your quota).
@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     cache_dir: Path = Path(".cache/llm")
     data_dir: Path = Path("data/raw")
     runs_dir: Path = Path("runs")
+    pdf_dir: Path = Path("data/raw/financebench_pdfs")
+    index_dir: Path = Path(".cache/index")
+
+    # Ingestion and retrieval defaults (tuned by experiment, not by guesswork).
+    chunk_max_chars: int = 1500
+    chunk_overlap_chars: int = 200
+    retrieval_k: int = 5
 
 
 def get_settings() -> Settings:

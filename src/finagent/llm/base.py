@@ -10,6 +10,13 @@ from pydantic import BaseModel
 T = TypeVar("T", bound=BaseModel)
 
 
+class QuotaExhaustedError(RuntimeError):
+    """A provider quota that will not recover within minutes (e.g. a daily limit) is used up.
+
+    Callers should stop and resume later rather than retry: retrying only wastes time.
+    """
+
+
 @dataclass(frozen=True)
 class Image:
     """Raw image bytes (a PDF page render, a chart crop, ...)."""

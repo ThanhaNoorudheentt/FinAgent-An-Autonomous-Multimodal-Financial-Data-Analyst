@@ -11,4 +11,3 @@ dist/
 data/raw/
 .cache/
 runs/
-.env.example

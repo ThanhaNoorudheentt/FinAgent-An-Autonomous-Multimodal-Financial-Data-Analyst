@@ -12,6 +12,8 @@ dependencies = [
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
     "google-genai>=1.0",
+    "numpy>=1.26",
+    "pymupdf>=1.24",
 ]
 
 [project.optional-dependencies]
@@ -44,7 +46,7 @@ plugins = ["pydantic.mypy"]
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["google.*"]
+module = ["google.*", "pymupdf.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

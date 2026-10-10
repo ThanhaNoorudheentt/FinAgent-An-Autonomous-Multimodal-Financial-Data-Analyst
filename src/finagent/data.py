@@ -6,6 +6,7 @@ import logging
 import os
 import tempfile
 import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -42,3 +43,26 @@ def download(name: str, data_dir: Path, *, force: bool = False) -> Path:
         raise
     logger.info("Downloaded %s -> %s", name, dest)
     return dest
+
+
+_FINANCEBENCH_PDFS = "https://raw.githubusercontent.com/patronus-ai/financebench/main/pdfs"
+
+
+def download_financebench_pdfs(doc_names: Iterable[str], pdf_dir: Path) -> list[Path]:
+    """Download the named FinanceBench filings (skipping ones already present)."""
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    for name in sorted(set(doc_names)):
+        dest = pdf_dir / f"{name}.pdf"
+        if not dest.exists():
+            fd, tmp = tempfile.mkstemp(dir=pdf_dir, suffix=".part")
+            os.close(fd)
+            try:
+                urllib.request.urlretrieve(f"{_FINANCEBENCH_PDFS}/{name}.pdf", tmp)
+                os.replace(tmp, dest)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+            logger.info("Downloaded %s", dest.name)
+        paths.append(dest)
+    return paths

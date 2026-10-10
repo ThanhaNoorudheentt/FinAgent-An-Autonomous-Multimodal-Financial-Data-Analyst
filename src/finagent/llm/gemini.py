@@ -7,6 +7,7 @@ The SDK client can be injected, which keeps this class testable without network 
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from functools import partial
 from typing import Any, TypeVar
@@ -14,7 +15,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel
 
 from finagent.config import Settings
-from finagent.llm.base import Image
+from finagent.llm.base import Image, QuotaExhaustedError
 from finagent.llm.cache import DiskCache, make_key
 from finagent.llm.resilience import RateLimiter, retry_with_backoff
 
@@ -26,9 +27,28 @@ _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _EMBED_BATCH_SIZE = 100  # Gemini embedding endpoint batch limit
 
 
+_RETRY_DELAY_RE = re.compile(r"retryDelay\W+(\d+(?:\.\d+)?)s")
+_LONG_DELAY_S = 600.0  # a server-suggested wait beyond this is not worth retrying in-process
+
+
+def _retry_delay_s(exc: BaseException) -> float | None:
+    match = _RETRY_DELAY_RE.search(str(exc))
+    return float(match.group(1)) if match else None
+
+
+def is_daily_quota_exhausted(exc: BaseException) -> bool:
+    """True for 429s caused by a per-day quota (or any wait the server says is very long)."""
+    if getattr(exc, "code", None) != 429:
+        return False
+    if "PerDay" in str(exc):
+        return True
+    delay = _retry_delay_s(exc)
+    return delay is not None and delay > _LONG_DELAY_S
+
+
 def is_retryable(exc: BaseException) -> bool:
-    """True for transient API errors (rate limits and server-side failures)."""
-    return getattr(exc, "code", None) in _RETRYABLE_STATUS
+    """True for transient API errors (per-minute rate limits and server-side failures)."""
+    return getattr(exc, "code", None) in _RETRYABLE_STATUS and not is_daily_quota_exhausted(exc)
 
 
 class GeminiClient:
@@ -148,9 +168,20 @@ class GeminiClient:
             self._limiter.acquire()
             return fn()
 
-        return retry_with_backoff(
-            limited,
-            is_retryable=is_retryable,
-            max_retries=self._settings.max_retries,
-            base_delay_s=self._settings.retry_base_delay_s,
-        )
+        try:
+            return retry_with_backoff(
+                limited,
+                is_retryable=is_retryable,
+                max_retries=self._settings.max_retries,
+                base_delay_s=self._settings.retry_base_delay_s,
+            )
+        except Exception as exc:
+            if is_daily_quota_exhausted(exc):
+                delay = _retry_delay_s(exc)
+                resets = f" (resets in about {delay / 3600:.1f} h)" if delay else ""
+                raise QuotaExhaustedError(
+                    f"Daily API quota exhausted for {self._settings.llm_model}{resets}. "
+                    "Quotas are per model: wait, enable billing, or switch models via "
+                    "FINAGENT_LLM_MODEL / --judge-model."
+                ) from exc
+            raise

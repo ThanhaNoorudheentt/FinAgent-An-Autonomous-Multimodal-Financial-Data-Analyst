@@ -40,3 +40,23 @@ def test_score_accepts_rounded_or_exact(finqa_example: FinQAExample) -> None:
     assert _score_finqa(ex, Answer(answer="14%"))  # rounded like the gold string
     assert _score_finqa(ex, Answer(answer="14.5%"))  # more precise, matches exe_ans
     assert not _score_finqa(ex, Answer(answer="20%"))
+
+
+def test_download_pdfs_skips_existing_and_dedupes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from finagent import data
+
+    fetched: list[str] = []
+
+    def fake_retrieve(url: str, dest: str) -> None:
+        fetched.append(url)
+        Path(dest).write_bytes(b"%PDF")
+
+    monkeypatch.setattr(data.urllib.request, "urlretrieve", fake_retrieve)
+    (tmp_path / "A.pdf").write_bytes(b"old")
+    paths = data.download_financebench_pdfs(["A", "B", "B"], tmp_path)
+    assert [p.name for p in paths] == ["A.pdf", "B.pdf"]
+    assert len(fetched) == 1
+    assert fetched[0].endswith("/B.pdf")
+    assert (tmp_path / "A.pdf").read_bytes() == b"old"

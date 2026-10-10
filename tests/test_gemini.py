@@ -110,3 +110,53 @@ def test_generate_model_parses_fenced_json(tmp_path: Path) -> None:
     client = make_client(tmp_path, models)
     result = generate_model(client, "q", Answer)
     assert result.answer == "94"
+
+
+# The message below is the real shape of the daily-quota error from the Gemini free tier.
+DAILY_QUOTA_MSG = (
+    "429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'status': 'RESOURCE_EXHAUSTED', 'details': "
+    "[{'quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', 'quotaValue': '20'}, "
+    "{'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': '66807s'}]}}"
+)
+PER_MINUTE_MSG = (
+    "429 RESOURCE_EXHAUSTED. {'details': [{'quotaId': 'GenerateRequestsPerMinutePerProject', "
+    "'@type': 'RetryInfo', 'retryDelay': '12s'}]}"
+)
+
+
+class QuotaApiError(Exception):
+    def __init__(self, message: str, code: int = 429) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def test_daily_quota_is_detected_but_per_minute_limit_is_not() -> None:
+    from finagent.llm.gemini import is_daily_quota_exhausted
+
+    assert is_daily_quota_exhausted(QuotaApiError(DAILY_QUOTA_MSG))
+    assert not is_daily_quota_exhausted(QuotaApiError(PER_MINUTE_MSG))
+    assert not is_daily_quota_exhausted(QuotaApiError(DAILY_QUOTA_MSG, code=500))
+    # A very long server-suggested wait counts even without the "PerDay" marker.
+    assert is_daily_quota_exhausted(QuotaApiError("429 {'retryDelay': '7200s'}"))
+
+
+def test_per_minute_429_is_still_retried_but_daily_is_not() -> None:
+    from finagent.llm.gemini import is_retryable
+
+    assert is_retryable(QuotaApiError(PER_MINUTE_MSG))
+    assert not is_retryable(QuotaApiError(DAILY_QUOTA_MSG))
+
+
+def test_daily_quota_fails_fast_with_clear_error(tmp_path: Path) -> None:
+    from finagent.llm.base import QuotaExhaustedError
+
+    class QuotaModels(StubModels):
+        def generate_content(self, **kwargs: Any) -> Any:
+            self.generate_calls += 1
+            raise QuotaApiError(DAILY_QUOTA_MSG)
+
+    models = QuotaModels()
+    client = make_client(tmp_path, models)
+    with pytest.raises(QuotaExhaustedError, match=r"resets in about 18\.6 h"):
+        client.generate("q")
+    assert models.generate_calls == 1  # no pointless retries
