@@ -160,3 +160,26 @@ def test_daily_quota_fails_fast_with_clear_error(tmp_path: Path) -> None:
     with pytest.raises(QuotaExhaustedError, match=r"resets in about 18\.6 h"):
         client.generate("q")
     assert models.generate_calls == 1  # no pointless retries
+
+
+def test_schema_rejection_falls_back_to_plain_json_mode(tmp_path: Path) -> None:
+    class SchemaRejecting(StubModels):
+        def generate_content(self, **kwargs: Any) -> Any:
+            self.generate_calls += 1
+            if kwargs["config"].response_schema is not None:
+                raise ApiError(400)
+            return SimpleNamespace(text='{"answer": "ok"}')
+
+    models = SchemaRejecting()
+    client = make_client(tmp_path, models)
+    assert client.generate("q", schema=Answer) == '{"answer": "ok"}'
+    assert models.generate_calls == 2  # rejected once, then succeeded without the schema
+    assert client.generate("q", schema=Answer) == '{"answer": "ok"}'
+    assert models.generate_calls == 2  # cached
+
+
+def test_bad_request_without_a_schema_is_not_retried(tmp_path: Path) -> None:
+    models = StubModels(fail_codes=[400])
+    with pytest.raises(ApiError):
+        make_client(tmp_path, models).generate("q")
+    assert models.generate_calls == 1

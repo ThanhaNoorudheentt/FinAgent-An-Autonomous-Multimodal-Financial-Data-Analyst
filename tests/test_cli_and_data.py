@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from finagent.cli import _build_parser, _score_finqa
+from finagent.cli import _build_parser
 from finagent.data import DATASETS, download
+from finagent.evaluation.finqa import score_finqa as _score_finqa
 from finagent.schemas import Answer, FinQAExample
 
 

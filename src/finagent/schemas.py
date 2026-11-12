@@ -40,6 +40,8 @@ class Answer(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     calculations: list[Calculation] = Field(default_factory=list)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    notes: list[str] = Field(default_factory=list)  # verification warnings, tool errors, ...
+    llm_calls: int | None = None  # generation calls spent on this question (cost metric)
 
 
 class Page(BaseModel):
@@ -48,6 +50,8 @@ class Page(BaseModel):
     doc_id: str
     page: int
     text: str
+    tabular: bool = False  # True when the text was rebuilt row-by-row from table layout
+    tags: tuple[str, ...] = ()  # e.g. ("balance_sheet",) for a primary financial statement page
 
 
 class Chunk(BaseModel):
@@ -59,6 +63,8 @@ class Chunk(BaseModel):
     doc_id: str
     page: int
     text: str
+    kind: EvidenceKind = "text"
+    tags: tuple[str, ...] = ()
 
 
 class ScoredChunk(BaseModel):

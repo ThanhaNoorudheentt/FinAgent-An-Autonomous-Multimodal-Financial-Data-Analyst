@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from finagent.evaluation.retrieval import evaluate_retrieval
+from finagent.evaluation.retrieval import breakdown, evaluate_retrieval
 from finagent.retrieval.retrievers import Retriever
 from finagent.schemas import Chunk, FinanceBenchEvidence, FinanceBenchExample, ScoredChunk
 
@@ -57,3 +57,21 @@ def test_missing_filings_are_skipped_not_fatal() -> None:
 def test_empty_input() -> None:
     report = evaluate_retrieval([], lambda d: RankedPages(d, []), ks=(1, 5))
     assert (report.n, report.mrr, report.recall_at_k) == (0, 0.0, {1: 0.0, 5: 0.0})
+
+
+def test_rows_keep_per_question_detail_and_breakdown_groups_by_type() -> None:
+    def factory(doc: str) -> Retriever:
+        return RankedPages(doc, {"A": [9, 7], "B": [1, 2]}[doc])
+
+    hit = example("A", [7]).model_copy(update={"question_type": "metrics-generated"})
+    miss = example("B", [8]).model_copy(
+        update={"question_type": "domain-relevant", "question_reasoning": None}
+    )
+    report = evaluate_retrieval([hit, miss], factory, ks=(1, 2))
+    by_id = {r.id: r for r in report.rows}
+    assert by_id["fb_A"].first_gold_rank == 2
+    assert by_id["fb_A"].retrieved_pages == [9, 7]
+    assert by_id["fb_B"].first_gold_rank is None
+    assert by_id["fb_B"].question_reasoning == "(none)"
+    result = breakdown(report.rows, lambda r: r.question_type, 2)
+    assert result == {"domain-relevant": (1, 0.0), "metrics-generated": (1, 1.0)}

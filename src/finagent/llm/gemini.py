@@ -126,15 +126,29 @@ class GeminiClient:
         if schema is not None:
             config_kwargs["response_mime_type"] = "application/json"
             config_kwargs["response_schema"] = schema
-        response = self._sdk.models.generate_content(
-            model=self._settings.llm_model,
-            contents=contents,
-            config=types.GenerateContentConfig(**config_kwargs),
-        )
+        try:
+            response = self._call_model(contents, config_kwargs)
+        except Exception as exc:
+            if schema is None or getattr(exc, "code", None) != 400:
+                raise
+            # The API rejected the response schema (unsupported construct). Fall back to plain JSON
+            # mode: the prompts already spell out the expected fields and pydantic validates them.
+            logger.warning("Schema rejected by the API (%s); retrying in plain JSON mode.", exc)
+            config_kwargs.pop("response_schema")
+            response = self._call_model(contents, config_kwargs)
         text = response.text
         if not isinstance(text, str):
             raise RuntimeError("Gemini returned no text (response may have been blocked).")
         return text
+
+    def _call_model(self, contents: list[Any], config_kwargs: dict[str, Any]) -> Any:
+        from google.genai import types
+
+        return self._sdk.models.generate_content(
+            model=self._settings.llm_model,
+            contents=contents,
+            config=types.GenerateContentConfig(**config_kwargs),
+        )
 
     # ------------------------------------------------------------------ embeddings
     def embed(self, texts: list[str]) -> list[list[float]]:

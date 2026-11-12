@@ -1,88 +1,122 @@
 # FinAgent: An Autonomous Multimodal Financial Data Analyst
 
-- **Stage 0:** config, typed schemas, resilient Gemini client (disk cache, rate limiting,
-  retries), benchmark loaders, resumable evaluation harness, no-tools FinQA baseline.
-- **Stage 1:** PDF parsing, page-bounded chunking, BM25 / dense / hybrid (RRF) retrieval, and a
-  conventional-RAG baseline on FinanceBench scored by an LLM judge plus evidence recall.
+FinAgent answers questions about SEC filings (10-K, 10-Q, 8-K, earnings PDFs). It finds the right
+pages, reads tables as tables, **computes with tools instead of trusting LLM arithmetic**, checks
+its own numbers against the source, and returns an evidence-grounded report.
 
-## Setup
+```
+PDF ──► layout-aware parsing ──► chunks (+ statement tags) ──► BM25 / dense / hybrid retrieval
+           │                                                        │
+           └─► line-item table (SQLite) ────────────────┐           ▼
+                                                        ▼     Statement-aware ranking
+ question ──► Planner ──► retrieve ──► Agent loop: find_line_items | search | calculate | sql
+                                                        │
+                                           Verifier (number grounding) ──► Report
+```
+
+## Three systems, one benchmark
+
+| System | Parsing | Retrieval | Extra | Tools / planning |
+|---|---|---|---|---|
+| `rag` — conventional RAG | plain text | BM25 / dense / hybrid | – | none |
+| `mmrag` — multimodal RAG | table rows + statement tags | + synonyms, statement-aware | page images sent to the model | none |
+| `agent` — agentic RAG | same as `mmrag` | same | line-item table | planner, calculator, SQL, verifier |
+
+All three share the LLM, the judge and the evaluation harness, so differences are attributable.
+
+## Quick start
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pre-commit install
-cp .env.example .env        # then add your Google AI Studio key
+cp .env.example .env                       # add FINAGENT_GOOGLE_API_KEY (Google AI Studio)
+
+finagent download-pdfs                     # the 84 FinanceBench filings
+finagent eval-retrieval --variant plain --split dev      # free, no API key
+finagent eval-retrieval --variant full  --split dev
+
+# Ask about any filing and get an analyst report
+finagent ask --pdf data/raw/financebench_pdfs/3M_2018_10K.pdf \
+  --question "What was FY2018 capital expenditure in USD millions?" --report-out report.md
 ```
 
-## Usage
+## Commands
 
-```bash
-finagent download                         # FinQA test + FinanceBench open sample
-finagent -v eval-finqa --limit 20         # baseline run; results in runs/*.jsonl
-```
+| Command | Purpose | API calls |
+|---|---|---|
+| `download`, `download-pdfs` | benchmark data and filings | none |
+| `eval-retrieval --variant plain\|layout\|layout+syn\|full --retriever bm25\|dense\|hybrid` | recall@k, MRR, per-question rows (`--out`) | none (bm25) / embeddings |
+| `eval-finqa --system direct\|program` | FinQA with gold context: LLM arithmetic vs calculator | 1 per question |
+| `eval-financebench --system rag\|mmrag\|agent` | end-to-end FinanceBench, judged | 1 / 1 / ~4-8, plus 1 judge |
+| `ask` | one question, one filing, report output | as above |
+| `compare run1.jsonl run2.jsonl ...` | accuracy, evidence recall, LLM calls, latency side by side | none |
 
-### Stage 1: RAG on FinanceBench
+Runs are **resumable** and **quota-aware**: finished questions are skipped, LLM calls are cached
+on disk, and an exhausted daily quota stops the run cleanly (exit code 3). Use a new `--run-name`
+whenever you change prompts, chunking or `k`. Use `--split dev` while developing and `--split test`
+only for final numbers.
 
-```bash
-finagent download-pdfs --limit 20          # filings for the first 20 questions
-# or place PDFs yourself at data/raw/financebench_pdfs/<doc_name>.pdf  (e.g. 3M_2018_10K.pdf)
-finagent -v eval-financebench --retriever bm25   --limit 20    # free: no embeddings
-finagent -v eval-financebench --retriever dense  --limit 20
-finagent -v eval-financebench --retriever hybrid --limit 20 --judge-model <other-model>
-```
+## What has been measured so far
 
-Results go to `runs/financebench-<run-name>.jsonl`, judge reasons to `*.judge.jsonl`.
-The run name defaults to `rag-<retriever>-k<k>`; **use a new `--run-name` whenever you change
-chunking, k or prompts**, because finished questions are skipped on resume.
-Page numbers are 0-based everywhere (verified against FinanceBench gold pages).
-Embedding a filing costs roughly 5 API calls; indexes are cached in `.cache/index`.
+Retrieval (BM25, all 84 filings, recall = share of gold evidence pages found in the top-k chunks):
 
-### Retrieval-only evaluation (no generation or judge calls)
+| variant | dev recall@5 / @10 | test recall@5 / @10 | test MRR |
+|---|---|---|---|
+| plain text (baseline) | 0.289 / 0.389 | 0.362 / 0.438 | 0.24 |
+| + table-row layout | 0.267 / 0.411 | 0.362 / 0.448 | 0.25 |
+| + accounting synonyms | 0.367 / 0.544 | 0.476 / 0.598 | 0.31 |
+| + statement-aware ranking (`full`) | **0.544 / 0.678** | **0.648 / 0.708** | **0.44** |
 
-```bash
-finagent eval-retrieval --retriever bm25 --limit 150      # free, needs no API key
-finagent eval-retrieval --retriever dense --limit 150     # embedding calls only
-```
+End-to-end accuracy for `rag`, `mmrag`, `agent` and the FinQA comparison requires your Gemini quota;
+see `docs/EVALUATION.md` for the exact commands and budget. Fill the results table there.
 
-Reports recall@k (share of gold evidence pages found in the top-k chunks) and MRR. Use it to
-choose chunking and retrievers *before* spending generation quota on end-to-end runs.
+## Project aims: status
 
-### API quotas
-
-Free-tier quotas are per model and can be as low as ~20 generation calls per day; a FinanceBench
-question uses two (answer + judge). When a daily quota is exhausted the run **stops cleanly**
-(exit code 3), keeps all finished results, and resumes where it left off when you re-run the same
-command. Spread load with `--judge-model <other-model>`, or enable billing for larger limits.
-
-Runs are resumable: re-running the same command skips finished questions, so an interrupted
-Colab session never re-spends API budget. LLM calls are cached on disk in `.cache/llm`.
-
-### Google Colab
-
-```python
-!git clone <your-repo-url> && cd finagent && pip install -e .
-from google.colab import userdata, drive
-import os; os.environ["FINAGENT_GOOGLE_API_KEY"] = userdata.get("GOOGLE_API_KEY")
-drive.mount("/content/drive")
-os.environ["FINAGENT_CACHE_DIR"] = "/content/drive/MyDrive/finagent/cache"
-os.environ["FINAGENT_RUNS_DIR"] = "/content/drive/MyDrive/finagent/runs"
-!finagent -v eval-finqa --limit 20
-```
+| Aim | Status |
+|---|---|
+| 1. Multimodal pipeline: text, tables, visuals | Text and tables: done (row reconstruction, statement tagging, line items). Visuals: page images sent to Gemini in `mmrag`; chart *data* is not extracted. |
+| 2. Evidence across sections, pages, documents | Sections and pages within a filing: done. **Cross-document retrieval is not implemented** (one filing per question). |
+| 3. Agentic planning and tool selection | Done: planner, tool-choosing loop, step budget. |
+| 4. Python/SQL tools for numbers | Done: AST-based calculator (no `exec`), read-only SQL over extracted line items. |
+| 5. Evidence-grounded reports with confidence | Done: Markdown report with calculations, sources, verification notes. Confidence is a heuristic, not calibrated. |
+| 6. Benchmarking and comparison | Harness, splits, judge and comparison table done; **end-to-end numbers need your API runs**. |
 
 ## Quality gates
 
 ```bash
-ruff check . && ruff format --check . && mypy && pytest -m "not live"
+make check        # ruff, ruff format --check, mypy --strict, pytest (no network)
 ```
+
+`pytest` runs ~200 tests offline using a scripted fake LLM and synthetic PDFs. Tests marked `live`
+(none by default) would call the real API.
 
 ## Layout
 
-| Path | Purpose |
-|---|---|
-| `src/finagent/llm/` | `LLMClient` protocol, `GeminiClient`, `FakeClient`, cache, rate limit/retry |
-| `src/finagent/schemas.py` | `Evidence`, `Calculation`, `Answer`, benchmark example models |
-| `src/finagent/evaluation/` | dataset loaders, metrics, LLM judge, resumable harness |
-| `src/finagent/ingestion/` | PDF text extraction, page-bounded chunking |
-| `src/finagent/indexing/` | numpy vector index, build-and-cache per filing |
-| `src/finagent/retrieval/` | BM25, dense, hybrid (reciprocal rank fusion) |
-| `src/finagent/systems/` | QA systems: direct FinQA baseline, FinanceBench RAG |
+```
+src/finagent/
+  llm/          LLMClient protocol, GeminiClient (cache, rate limit, retry, quota), FakeClient
+  ingestion/    pdf parsing, layout rows, statement tagging, chunking, line items, page rendering
+  indexing/     numpy vector index, build-and-cache per filing
+  retrieval/    BM25, dense, hybrid (RRF), statement-aware, accounting synonyms
+  tools/        safe calculator, read-only SQL
+  agent/        planner/step schemas, prompts, agent loop, verifier
+  systems/      direct + program-of-thought (FinQA), RAG / multimodal RAG, agent adapter
+  evaluation/   loaders, metrics, judge, harness, splits, retrieval eval
+  reporting/    Markdown analyst report
+  pipeline.py   builds a FilingContext per PDF; cli.py command line
+docs/           DESIGN.md, EVALUATION.md, REFERENCES.md
+```
+
+### Google Colab
+
+```python
+!git clone <your-repo-url> /content/finagent && pip install -q -e /content/finagent
+import os
+from google.colab import userdata, drive
+os.environ["FINAGENT_GOOGLE_API_KEY"] = userdata.get("GOOGLE_API_KEY")
+drive.mount("/content/drive")
+os.environ["FINAGENT_CACHE_DIR"] = "/content/drive/MyDrive/finagent/cache"
+os.environ["FINAGENT_RUNS_DIR"] = "/content/drive/MyDrive/finagent/runs"
+os.environ["FINAGENT_INDEX_DIR"] = "/content/drive/MyDrive/finagent/index"
+!cd /content/finagent && finagent -v eval-financebench --system agent --split dev
+```

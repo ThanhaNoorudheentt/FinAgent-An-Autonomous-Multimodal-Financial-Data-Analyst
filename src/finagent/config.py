@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     # Model names change often; keep them in config, never hard-code them in logic.
     llm_model: str = "gemini-2.5-flash"
     embed_model: str = "gemini-embedding-001"
+    embedding_backend: Literal["gemini", "sentence-transformers"] = "gemini"
+    local_embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     # Cost and rate control (free-tier limits are low; tune to your quota).
     requests_per_minute: int = 10

@@ -39,5 +39,8 @@ def make_judge_scorer(
 
 
 def evidence_metrics(example: FinanceBenchExample, answer: Answer) -> dict[str, float]:
-    """Retrieval recall: share of gold (doc, page) evidence present among retrieved chunks."""
-    return {"evidence_recall": evidence_recall(answer.evidence, example.evidence)}
+    """Evidence recall (gold pages among retrieved evidence) and, if known, LLM calls spent."""
+    metrics = {"evidence_recall": evidence_recall(answer.evidence, example.evidence)}
+    if answer.llm_calls is not None:
+        metrics["llm_calls"] = float(answer.llm_calls)
+    return metrics

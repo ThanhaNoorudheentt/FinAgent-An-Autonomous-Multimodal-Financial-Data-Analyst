@@ -26,8 +26,17 @@ class Image:
 
 
 @runtime_checkable
-class LLMClient(Protocol):
-    """Minimal surface needed by FinAgent. Implementations: GeminiClient, FakeClient."""
+class EmbeddingClient(Protocol):
+    """Minimal interface required by the vector index and dense retriever."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return one embedding vector per input text, in order."""
+        ...
+
+
+@runtime_checkable
+class LLMClient(EmbeddingClient, Protocol):
+    """Text-generation and embedding interface. Implementations: GeminiClient, FakeClient."""
 
     def generate(
         self,
@@ -39,10 +48,6 @@ class LLMClient(Protocol):
         temperature: float = 0.0,
     ) -> str:
         """Return the model's text. If ``schema`` is given, the text is JSON for that schema."""
-        ...
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        """Return one embedding vector per input text, in order."""
         ...
 
 
