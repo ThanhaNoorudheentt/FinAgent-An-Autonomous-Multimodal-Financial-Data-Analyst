@@ -34,4 +34,5 @@ class SentenceTransformerClient:
             normalize_embeddings=True,
             show_progress_bar=False,
         )
-        return vectors.tolist()
+        result: list[list[float]] = vectors.tolist()
+        return result
